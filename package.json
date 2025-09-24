@@ -1,0 +1,18 @@
+{
+    "name": "air-hockey-phaser",
+    "private": true,
+    "version": "1.0.0",
+    "type": "module",
+    "scripts": {
+        "start": "vite",
+        "build": "vite build",
+        "preview": "vite preview --open"
+    },
+    "dependencies": {
+        "phaser": "^3.90.0"
+    },
+    "devDependencies": {
+        "typescript": "^5.9.2",
+        "vite": "^7.1.7"
+    }
+}
