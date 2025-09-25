@@ -9,6 +9,8 @@
         "preview": "vite preview --open"
     },
     "dependencies": {
+        "@types/matter-js": "^0.20.2",
+        "matter-js": "^0.20.0",
         "phaser": "^3.90.0"
     },
     "devDependencies": {

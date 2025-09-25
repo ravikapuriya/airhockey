@@ -1,18 +1,13 @@
 import { PADDLE_OPTIONS, PUCK_OPTIONS, type PickerItem } from '../core/Palette';
-import { TextureFactory } from '../core/TextureFactory';
 import { Save, type SaveData, type BestOf } from '../core/Save';
+import { ButtonUtils } from '../utils/Button';
+import { ASSET_KEYS } from '../constants/GameConfig';
 
 type Mode = '1p' | '2p';
 
-// Fixed preview constants to match game configuration
-const PREVIEW_CONFIG = {
-    mallet: { radius: 30 },
-    puck: { radius: 16 }
-};
 
 export class CustomizeScene extends Phaser.Scene {
     private saveData!: SaveData;
-    private tf!: TextureFactory;
 
     private p1Idx!: number;
     private p2Idx!: number;
@@ -32,7 +27,6 @@ export class CustomizeScene extends Phaser.Scene {
         this.bestOf = data.bestOf ?? 3;
 
         this.saveData = await Save.get();
-        this.tf = new TextureFactory(this);
 
         // read save data → indices
         this.p1Idx = PADDLE_OPTIONS.findIndex(o => o.id === this.saveData.playerPaddleId);
@@ -45,12 +39,13 @@ export class CustomizeScene extends Phaser.Scene {
         if (this.puckIdx === -1) this.puckIdx = 0;
 
         const { width, height } = this.scale;
-        this.cameras.main.setBackgroundColor('#4DD0E1');
+        // Set background
+        this.add.image(0, 0, ASSET_KEYS.BACKGROUND).setOrigin(0).setDisplaySize(width, height);
 
         const modeTitle = this.mode === '1p' ? 'SINGLE PLAYER' : 'TWO PLAYERS';
         this.addTitle(width / 2, 120, modeTitle);
 
-        const yh = 150, oh = 290, ph = 430;
+        const yh = height / 2 - 300, oh = height / 2, ph = height / 2 + 300;
 
         this.makeRow('Your Paddle', width / 2, yh,
             () => this.bump('p1', -1), () => this.bump('p1', +1),
@@ -67,11 +62,8 @@ export class CustomizeScene extends Phaser.Scene {
             () => this.redraw('puck')
         );
 
-        // Next button
-        const next = this.add.text(width / 2, height - 60, 'Next ▶', {
-            fontFamily: 'monospace', fontSize: '24px', color: '#0f0', backgroundColor: '#032'
-        }).setPadding(14, 8).setOrigin(0.5).setInteractive({ useHandCursor: true });
-        next.on('pointerup', async () => {
+        // Play button
+        ButtonUtils.createButton(this, width / 2, height - 200, 'PLAY', async () => {
             // persist
             await Save.set({
                 playerPaddleId: PADDLE_OPTIONS[this.p1Idx].id,
@@ -79,6 +71,9 @@ export class CustomizeScene extends Phaser.Scene {
                 puckId: PUCK_OPTIONS[this.puckIdx].id
             });
             this.scene.start('Game', { mode: this.mode, bestOf: this.bestOf });
+        }, {
+            fontColor: '#000',
+            fontSize: '64px GenosRegular'
         });
 
         // Initial previews
@@ -88,17 +83,16 @@ export class CustomizeScene extends Phaser.Scene {
     }
 
     private addTitle(x: number, y: number, txt: string) {
-        const cap = this.add.text(x, y, txt, {
-            fontFamily: 'monospace', fontSize: '32px', color: '#fff'
+        this.add.text(x, y, txt, {
+            font: '72px GenosRegular', color: '#000',
         }).setOrigin(0.5);
-        cap.setShadow(0, 2, '#000', 4, true, true);
     }
 
     private makeRow(label: string, cx: number, cy: number, onLeft: () => void, onRight: () => void, after: () => void) {
-        this.add.text(cx, cy - 40, label, { fontFamily: 'monospace', fontSize: '18px', color: '#9cf' }).setOrigin(0.5);
+        this.add.text(cx, cy - 100, label, { font: '48px GenosRegular', color: '#000' }).setOrigin(0.5);
 
-        const left = this.arrow(cx - 140, cy, '◀', onLeft);
-        const right = this.arrow(cx + 140, cy, '▶', onRight);
+        this.arrow(cx - 140, cy, '◀', onLeft);
+        this.arrow(cx + 140, cy, '▶', onRight);
 
         // placeholder preview, replaced by redraw()
         const img = this.add.image(cx, cy, '__').setVisible(false);
@@ -126,26 +120,17 @@ export class CustomizeScene extends Phaser.Scene {
     }
 
     private redraw(which: 'p1' | 'p2' | 'puck') {
-        const rPaddle = PREVIEW_CONFIG.mallet.radius;
-        const rPuck = PREVIEW_CONFIG.puck.radius;
-
         if (which === 'p1') {
             const c = PADDLE_OPTIONS[this.p1Idx].color;
-            const key = `p1_preview_${c}`;
-            this.tf.disc(key, rPaddle, c, true);
-            this.p1Preview.setTexture(key).setVisible(true);
+            this.p1Preview.setTexture(ASSET_KEYS.MALLET).setTint(c).setVisible(true);
         }
         if (which === 'p2') {
             const c = PADDLE_OPTIONS[this.p2Idx].color;
-            const key = `p2_preview_${c}`;
-            this.tf.disc(key, rPaddle, c, true);
-            this.p2Preview.setTexture(key).setVisible(true);
+            this.p2Preview.setTexture(ASSET_KEYS.MALLET).setTint(c).setVisible(true);
         }
         if (which === 'puck') {
             const c = PUCK_OPTIONS[this.puckIdx].color;
-            const key = `puck_preview_${c}`;
-            this.tf.disc(key, rPuck, c, true);
-            this.puckPreview.setTexture(key).setVisible(true);
+            this.puckPreview.setTexture(ASSET_KEYS.PUCK).setTint(c).setVisible(true);
         }
     }
 }

@@ -20,6 +20,22 @@ export const GameOptions = {
     },
     gameWidth: 1080,
     gameHeight: 1920,
+    table: {
+        width: 1080,
+        height: 1700,
+        wallThickness: 30,
+        goalWidth: 280,
+        goalDepth: 40,
+        edgeHeight: 60
+    },
+    puck: {
+        radius: 30,
+        bounce: 1.0,
+        maxSpeed: 1200
+    },
+    mallet: {
+        radius: 50
+    }
 };
 
 export const EVENT_KEYS = Object.freeze({
@@ -30,9 +46,15 @@ export const EVENT_KEYS = Object.freeze({
 });
 
 export const ASSET_KEYS = Object.freeze({
+    // Images
     COMMON_BUTTON: 'COMMON_BUTTON',
     TABLE: 'TABLE',
     TABLE_EDGE: 'TABLE_EDGE',
+    BACKGROUND: 'BACKGROUND',
+    MALLET: 'MALLET',
+    PUCK: 'PUCK',
+
+    // Audio
     SFX_BTN_CLICK: 'SFX_BTN_CLICK',
     GAME_MUSIC_LOOP: 'GAME_MUSIC_LOOP',
 });
@@ -50,6 +72,18 @@ export const IMAGE_ASSETS = [
         assetKey: ASSET_KEYS.TABLE_EDGE,
         path: 'assets/images/table-edge.png'
     },
+    {
+        assetKey: ASSET_KEYS.BACKGROUND,
+        path: 'assets/images/bg.jpg'
+    },
+    {
+        assetKey: ASSET_KEYS.MALLET,
+        path: 'assets/skins/mallet/mallet.png'
+    },
+    {
+        assetKey: ASSET_KEYS.PUCK,
+        path: 'assets/skins/puck/puck.png'
+    }
 ];
 
 export const AUDIO_ASSETS = [

@@ -1,38 +1,16 @@
-import { TextureFactory } from '../core/TextureFactory';
 import { AudioSystem } from '../core/Audio';
 import { HUD } from '../ui/HUD';
 import { PauseOverlay } from '../ui/PauseOverlay';
 import { MatchManager } from '../core/MatchManager';
 import { Save, type BestOf, type SaveData } from '../core/Save';
 import { PADDLE_OPTIONS, PUCK_OPTIONS } from '../core/Palette';
-import { ASSET_KEYS } from '../constants/GameConfig';
+import { ASSET_KEYS, GameOptions } from '../constants/GameConfig';
 
 type Mode = '1p' | '2p';
-
-// Fixed game constants since we're no longer using dynamic skins
-const GAME_CONFIG = {
-    table: {
-        width: 1080,
-        height: 1700,
-        wallThickness: 30,
-        goalWidth: 280,
-        goalDepth: 40,
-        edgeHeight: 60
-    },
-    puck: {
-        radius: 16,
-        bounce: 1.0,
-        maxSpeed: 800
-    },
-    mallet: {
-        radius: 30
-    }
-};
 
 export class GameScene extends Phaser.Scene {
     private saveData!: SaveData;
 
-    private tf!: TextureFactory;
     private audio!: AudioSystem;
     private hud!: HUD;
     private pauseUI!: PauseOverlay;
@@ -50,9 +28,14 @@ export class GameScene extends Phaser.Scene {
     private mode: Mode = '1p';
     private bestOf: BestOf = 3;
 
-    private tableOrigin!: Phaser.Math.Vector2;
     private bounds!: Phaser.Physics.Arcade.StaticGroup;
     private goals!: { top: Phaser.Physics.Arcade.StaticBody; bottom: Phaser.Physics.Arcade.StaticBody };
+
+    // Touch/Mouse control state
+    private isPointerDown = false;
+    private tableBounds!: { left: number; right: number; top: number; bottom: number; };
+    private p1Zone!: { minY: number; maxY: number; };
+    private p2Zone!: { minY: number; maxY: number; };
 
     constructor() { super('Game'); }
 
@@ -62,7 +45,6 @@ export class GameScene extends Phaser.Scene {
         this.mode = data.mode ?? '1p';
         this.bestOf = data.bestOf ?? this.saveData.bestOf;
 
-        this.tf = new TextureFactory(this);
         this.audio = new AudioSystem(this);
         this.hud = new HUD(this);
         this.rounds = new MatchManager(this.bestOf);
@@ -74,80 +56,137 @@ export class GameScene extends Phaser.Scene {
 
         this.hud.create(this.mode.toUpperCase() as '1P' | '2P');
         this.hud.setScore(this.pointsP1, this.pointsP2);
-        this.showMatchBanner(`Best of ${this.bestOf}`);
+        this.showMatchBanner(`Best of ${this.bestOf} - First to ${this.rounds.getScore().toWin} rounds`);
 
         this.pauseUI = new PauseOverlay(this, () => this.fullRestart());
         await this.pauseUI.create();
 
         this.input.setPollAlways();
-        this.input.on('pointermove', (p: Phaser.Input.Pointer) => this.moveP1To(p.worldX, p.worldY));
+        this.setupInputControls();
         this.input.keyboard?.on('keydown-P', () => this.pauseUI.show());
     }
 
     private createTableAndWalls() {
-        const t = GAME_CONFIG.table;
+        const t = GameOptions.table;
         const { width: screenWidth, height: screenHeight } = this.scale;
 
-        // Make table fill the screen like the reference image
-        const actualW = screenWidth;
-        const actualH = screenHeight - 120; // Leave space for HUD
+        // Calculate proper table dimensions
+        const tableWidth = screenWidth - 100; // Leave margin
+        const tableHeight = screenHeight - 200; // Leave space for HUD
+        const tableY = screenHeight / 2 + 20;
 
-        // Position table to fill most of the screen
-        const tableY = screenHeight / 2 + 30; // Center with slight offset for HUD
+        // Create main table - keeping your fixed dimensions
+        this.table = this.add.image(screenWidth / 2, tableY, ASSET_KEYS.TABLE);
+        this.table.setDisplaySize(tableWidth - 160, tableHeight - 160);
 
-        // Create main table that fills the screen
-        this.table = this.add.image(screenWidth / 2, tableY, ASSET_KEYS.TABLE)
-            .setDisplaySize(actualW, actualH);
+        // Table edge (decorative) - keeping your fixed dimensions
+        this.tableEdge = this.add.image(screenWidth / 2, tableY, ASSET_KEYS.TABLE_EDGE);
+        this.tableEdge.setDisplaySize(tableWidth, tableHeight);
 
-        // Position table edge at the very top of the playable area
-        const edgeY = 100; // Just below the HUD area
-        this.tableEdge = this.add.image(screenWidth / 2, edgeY, ASSET_KEYS.TABLE_EDGE)
-            .setDisplaySize(actualW, t.edgeHeight)
-            .setOrigin(0.5, 0.5);
+        // Calculate actual playable area bounds
+        const playAreaPadding = GameOptions.puck.radius + 10; // Padding for puck
+        this.tableBounds = {
+            left: screenWidth / 2 - tableWidth / 2 + t.wallThickness + playAreaPadding,
+            right: screenWidth / 2 + tableWidth / 2 - t.wallThickness - playAreaPadding,
+            top: tableY - tableHeight / 2 + t.wallThickness + playAreaPadding,
+            bottom: tableY + tableHeight / 2 - t.wallThickness - playAreaPadding
+        };
 
-        this.tableOrigin = new Phaser.Math.Vector2(
-            this.table.x - actualW / 2,
-            edgeY - t.edgeHeight / 2
+        // Set up player zones with proper spacing
+        const midY = tableY;
+        const zoneBuffer = 50;
+        this.p1Zone = {
+            minY: midY + zoneBuffer,
+            maxY: this.tableBounds.bottom - GameOptions.mallet.radius - 10
+        };
+        this.p2Zone = {
+            minY: this.tableBounds.top + GameOptions.mallet.radius + 10,
+            maxY: midY - zoneBuffer
+        };
+
+        // Set physics world bounds to match table bounds exactly
+        this.physics.world.setBounds(
+            this.tableBounds.left,
+            this.tableBounds.top,
+            this.tableBounds.right - this.tableBounds.left,
+            this.tableBounds.bottom - this.tableBounds.top,
+            true, true, true, true
         );
 
-        // Set physics bounds to the full playable area including edge
-        const playableHeight = actualH + t.edgeHeight;
-        this.physics.world.setBounds(this.tableOrigin.x, this.tableOrigin.y, actualW, playableHeight, true, true, true, true);
-
-        // Use full screen dimensions for collision boundaries
-        const gx = this.table.x;
+        // Create collision walls
         const goalHalf = t.goalWidth / 2;
-        const leftX = this.tableOrigin.x;
-        const rightX = leftX + actualW;
-        const topY = this.tableOrigin.y + t.edgeHeight; // Start walls after the edge
-        const botY = topY + actualH - t.edgeHeight;
-        const WT = t.wallThickness;
+        const wallThickness = t.wallThickness;
 
         const addRect = (x: number, y: number, rw: number, rh: number) => {
-            const r = this.add.rectangle(x, y, rw, rh, 0xffffff, 0).setOrigin(0);
+            const r = this.add.rectangle(x, y, rw, rh, 0xffffff, 0).setOrigin(0.5);
             this.physics.add.existing(r, true);
             return r.body as Phaser.Physics.Arcade.StaticBody;
         };
 
         this.bounds = this.physics.add.staticGroup();
-        // Top wall (with goal opening)
-        this.bounds.add(addRect(leftX, topY, (actualW / 2 - goalHalf), WT).gameObject);
-        this.bounds.add(addRect(gx + goalHalf, topY, (actualW / 2 - goalHalf), WT).gameObject);
 
-        // Bottom wall (with goal opening)
-        this.bounds.add(addRect(leftX, botY - WT, (actualW / 2 - goalHalf), WT).gameObject);
-        this.bounds.add(addRect(gx + goalHalf, botY - WT, (actualW / 2 - goalHalf), WT).gameObject);
+        // Top walls (with goal opening)
+        const topWallY = this.tableBounds.top - wallThickness / 2;
+        const leftTopWallWidth = (this.tableBounds.right - this.tableBounds.left) / 2 - goalHalf;
+        const rightTopWallWidth = leftTopWallWidth;
 
-        // Side walls (full height including edge area)
-        this.bounds.add(addRect(leftX, this.tableOrigin.y, WT, actualH + t.edgeHeight).gameObject);
-        this.bounds.add(addRect(rightX - WT, this.tableOrigin.y, WT, actualH + t.edgeHeight).gameObject);
+        this.bounds.add(addRect(
+            this.tableBounds.left + leftTopWallWidth / 2,
+            topWallY,
+            leftTopWallWidth,
+            wallThickness
+        ).gameObject);
+        this.bounds.add(addRect(
+            this.tableBounds.right - rightTopWallWidth / 2,
+            topWallY,
+            rightTopWallWidth,
+            wallThickness
+        ).gameObject);
 
-        // Table edge barrier (invisible wall at the edge)
-        this.bounds.add(addRect(leftX + WT, this.tableOrigin.y + t.edgeHeight - 5, actualW - 2 * WT, 10).gameObject);
+        // Bottom walls (with goal opening)
+        const bottomWallY = this.tableBounds.bottom + wallThickness / 2;
+        this.bounds.add(addRect(
+            this.tableBounds.left + leftTopWallWidth / 2,
+            bottomWallY,
+            leftTopWallWidth,
+            wallThickness
+        ).gameObject);
+        this.bounds.add(addRect(
+            this.tableBounds.right - rightTopWallWidth / 2,
+            bottomWallY,
+            rightTopWallWidth,
+            wallThickness
+        ).gameObject);
 
+        // Side walls
+        const sideWallHeight = this.tableBounds.bottom - this.tableBounds.top;
+        this.bounds.add(addRect(
+            this.tableBounds.left - wallThickness / 2,
+            (this.tableBounds.top + this.tableBounds.bottom) / 2,
+            wallThickness,
+            sideWallHeight
+        ).gameObject);
+        this.bounds.add(addRect(
+            this.tableBounds.right + wallThickness / 2,
+            (this.tableBounds.top + this.tableBounds.bottom) / 2,
+            wallThickness,
+            sideWallHeight
+        ).gameObject);
+
+        // Goal detection areas
         const goalDepth = t.goalDepth;
-        const topGoal = addRect(gx - goalHalf, topY + goalDepth, t.goalWidth, 2);
-        const bottomGoal = addRect(gx - goalHalf, botY - goalDepth - 2, t.goalWidth, 2);
+        const topGoal = addRect(
+            screenWidth / 2,
+            this.tableBounds.top - goalDepth / 2,
+            t.goalWidth,
+            goalDepth
+        );
+        const bottomGoal = addRect(
+            screenWidth / 2,
+            this.tableBounds.bottom + goalDepth / 2,
+            t.goalWidth,
+            goalDepth
+        );
         this.goals = { top: topGoal, bottom: bottomGoal };
     }
 
@@ -156,25 +195,30 @@ export class GameScene extends Phaser.Scene {
         const p2Color = PADDLE_OPTIONS.find(o => o.id === this.saveData.opponentPaddleId)?.color ?? 0xff3a3a;
         const puckColor = PUCK_OPTIONS.find(o => o.id === this.saveData.puckId)?.color ?? 0x1a2a6c;
 
-        // Generate colored disc textures
-        this.tf.disc('puck', GAME_CONFIG.puck.radius, puckColor, true);
-        this.tf.disc('mallet1', GAME_CONFIG.mallet.radius, p1Color, true);
-        this.tf.disc('mallet2', GAME_CONFIG.mallet.radius, p2Color, true);
-
-        this.puck = this.physics.add.image(this.table.x, this.table.y, 'puck');
-        this.puck.setCircle(GAME_CONFIG.puck.radius * 2, 0, 0);
-        this.puck.setBounce(GAME_CONFIG.puck.bounce);
-        this.puck.setDamping(true).setDrag(0.002, 0.002);
-        this.puck.setMaxVelocity(GAME_CONFIG.puck.maxSpeed, GAME_CONFIG.puck.maxSpeed);
+        // Create puck using actual image with tint
+        this.puck = this.physics.add.image(this.table.x, this.table.y, ASSET_KEYS.PUCK);
+        this.puck.setTint(puckColor);
+        this.puck.setCircle(GameOptions.puck.radius, 0, 0);
+        this.puck.setBounce(GameOptions.puck.bounce);
+        this.puck.setDamping(true).setDrag(0.001, 0.001);
+        this.puck.setMaxVelocity(GameOptions.puck.maxSpeed, GameOptions.puck.maxSpeed);
+        this.puck.setMass(0.3);
+        this.puck.setDepth(10); // Puck should be above table but below mallets
 
         const { width: screenWidth, height: screenHeight } = this.scale;
 
-        // Position mallets in their respective halves
-        this.p1 = this.physics.add.image(screenWidth / 2, screenHeight * 0.75, 'mallet1')
-            .setImmovable(true).setCircle(GAME_CONFIG.mallet.radius * 2, 0, 0);
+        // Create mallets using actual image with tints
+        this.p1 = this.physics.add.image(screenWidth / 2, screenHeight * 0.75, ASSET_KEYS.MALLET)
+            .setTint(p1Color)
+            .setImmovable(true)
+            .setCircle(GameOptions.mallet.radius, 0, 0)
+            .setDepth(20); // Mallets should be above puck
 
-        this.p2 = this.physics.add.image(screenWidth / 2, screenHeight * 0.35, 'mallet2')
-            .setImmovable(true).setCircle(GAME_CONFIG.mallet.radius * 2, 0, 0);
+        this.p2 = this.physics.add.image(screenWidth / 2, screenHeight * 0.35, ASSET_KEYS.MALLET)
+            .setTint(p2Color)
+            .setImmovable(true)
+            .setCircle(GameOptions.mallet.radius, 0, 0)
+            .setDepth(20); // Mallets should be above puck
     }
 
     private createCollisions() {
@@ -185,10 +229,25 @@ export class GameScene extends Phaser.Scene {
         this.physics.add.overlap(this.puck, this.goals.bottom.gameObject, () => this.goalFor(2));
     }
 
-    private onHit(_: Phaser.Types.Physics.Arcade.ImageWithDynamicBody) {
+    private onHit(mallet: Phaser.Types.Physics.Arcade.ImageWithDynamicBody) {
         this.audio.hit();
         const v = this.puck.body.velocity.length();
-        if (v < 80) this.puck.body.velocity.normalize().scale(150);
+
+        // Calculate direction from mallet to puck for more realistic physics
+        const angle = Phaser.Math.Angle.Between(mallet.x, mallet.y, this.puck.x, this.puck.y);
+
+        // More natural force calculation based on current velocity and distance
+        const distance = Phaser.Math.Distance.Between(mallet.x, mallet.y, this.puck.x, this.puck.y);
+        const baseForce = Math.max(200, v * 0.8); // Base minimum force
+        const distanceMultiplier = Math.max(0.5, (GameOptions.mallet.radius + GameOptions.puck.radius - distance) / 30);
+        const force = baseForce + (baseForce * distanceMultiplier * 1.5);
+
+        // Apply force in the direction away from mallet with some variation
+        const finalForce = Math.min(force, GameOptions.puck.maxSpeed * 0.8); // Cap the force
+        this.puck.body.setVelocity(
+            Math.cos(angle) * finalForce,
+            Math.sin(angle) * finalForce
+        );
     }
 
     private goalFor(player: 1 | 2) {
@@ -196,15 +255,28 @@ export class GameScene extends Phaser.Scene {
         if (player === 1) this.pointsP1++; else this.pointsP2++;
         this.hud.setScore(this.pointsP1, this.pointsP2);
 
-        this.rounds.awardRound(player);
-        this.showRoundToast(`Round to Player ${player}`);
+        // Check if player reached the goal score for this round
+        const roundWinScore = 3; // Each round is first to 3 goals
+        if (this.pointsP1 >= roundWinScore || this.pointsP2 >= roundWinScore) {
+            // Determine round winner
+            const roundWinner = this.pointsP1 >= roundWinScore ? 1 : 2;
 
-        if (this.rounds.isMatchOver()) {
-            const w = this.rounds.winner()!;
-            this.showMatchBanner(`Player ${w} wins the match!`);
-            this.time.delayedCall(1500, () => this.fullRestartToMenu());
+            this.rounds.awardRound(roundWinner as 1 | 2);
+            const roundsScore = this.rounds.getScore();
+            this.showRoundToast(`Round ${roundsScore.p1 + roundsScore.p2} to Player ${roundWinner}! (${roundsScore.p1}-${roundsScore.p2})`);
+
+            // Check if match is over (best of X rounds)
+            if (this.rounds.isMatchOver()) {
+                const matchWinner = this.rounds.winner()!;
+                this.showMatchBanner(`Player ${matchWinner} wins the match!`);
+                this.time.delayedCall(3000, () => this.fullRestartToMenu());
+            } else {
+                // Start next round after a delay
+                this.time.delayedCall(1500, () => this.startNextRound(roundWinner as 1 | 2));
+            }
         } else {
-            this.time.delayedCall(600, () => this.startNextRound(player));
+            // Goal scored but round not over, just reset puck
+            this.time.delayedCall(1000, () => this.resetPuck(player === 1));
         }
     }
 
@@ -217,81 +289,206 @@ export class GameScene extends Phaser.Scene {
 
     private resetPuck(scoredForP1: boolean) {
         this.puck.setPosition(this.table.x, this.table.y);
-        this.puck.setVelocity(0, scoredForP1 ? -250 : 250);
+        // Give puck more initial velocity for natural gameplay
+        const initialSpeed = 300;
+        const direction = scoredForP1 ? -1 : 1;
+        // Add slight random angle for variety
+        const angle = (Math.random() - 0.5) * 0.3; // Small random angle
+        this.puck.setVelocity(
+            Math.sin(angle) * initialSpeed * 0.3,
+            direction * initialSpeed * Math.cos(angle)
+        );
+    }
+
+    private setupInputControls() {
+        this.input.on('pointerdown', () => {
+            this.isPointerDown = true;
+        });
+
+        this.input.on('pointerup', () => {
+            this.isPointerDown = false;
+        });
+
+        this.input.on('pointermove', (pointer: Phaser.Input.Pointer) => {
+            if (this.isPointerDown) {
+                this.moveP1To(pointer.worldX, pointer.worldY);
+            }
+        });
     }
 
     private moveP1To(x: number, y: number) {
+        if (!this.isPointerDown) return;
+
         const sens = this.saveData.pointerSensitivity;
-        const nx = Phaser.Math.Linear(this.p1.x, x, 0.25 * sens);
-        const ny = Phaser.Math.Linear(this.p1.y, y, 0.25 * sens);
+        const nx = Phaser.Math.Linear(this.p1.x, x, 0.35 * sens);
+        const ny = Phaser.Math.Linear(this.p1.y, y, 0.35 * sens);
 
-        const t = GAME_CONFIG.table;
-        const { width: screenWidth, height: screenHeight } = this.scale;
-        const minX = t.wallThickness + GAME_CONFIG.mallet.radius * 2;
-        const maxX = screenWidth - t.wallThickness - GAME_CONFIG.mallet.radius * 2;
-        const minY = screenHeight / 2 + 20; // Middle line + buffer
-        const maxY = screenHeight - 50 - GAME_CONFIG.mallet.radius * 2; // Bottom - buffer
+        const malletRadius = GameOptions.mallet.radius;
+        const buffer = 5;
 
-        this.p1.setPosition(Phaser.Math.Clamp(nx, minX, maxX), Phaser.Math.Clamp(ny, minY, maxY));
+        // Constrain to table bounds and player zone with proper mallet radius
+        const clampedX = Phaser.Math.Clamp(
+            nx,
+            this.tableBounds.left + malletRadius + buffer,
+            this.tableBounds.right - malletRadius - buffer
+        );
+        const clampedY = Phaser.Math.Clamp(
+            ny,
+            this.p1Zone.minY,
+            this.p1Zone.maxY
+        );
+
+        this.p1.setPosition(clampedX, clampedY);
     }
 
     update(_: number, dt: number) {
         if (this.mode === '1p') this.aiUpdate(dt);
         this.lockMalletsToHalves();
+        this.constrainPuckToTable();
     }
 
     private aiUpdate(_: number) {
-        if (!this.tableOrigin || !this.table || !this.puck || !this.p2) return;
+        if (!this.puck || !this.p2) return;
 
-        const t = GAME_CONFIG.table;
-        const { width: screenWidth, height: screenHeight } = this.scale;
-        const minX = t.wallThickness + GAME_CONFIG.mallet.radius * 2;
-        const maxX = screenWidth - t.wallThickness - GAME_CONFIG.mallet.radius * 2;
-        const minY = 120 + GAME_CONFIG.mallet.radius * 2; // Below edge + buffer
-        const maxY = screenHeight / 2 - 20; // Above middle line
-        const targetX = Phaser.Math.Clamp(this.puck.x, minX, maxX);
-        const defendY = Phaser.Math.Clamp(this.puck.y - 40, minY, maxY - 10);
-        const lerp = 0.12;
-        this.p2.x = Phaser.Math.Linear(this.p2.x, targetX, lerp);
-        this.p2.y = Phaser.Math.Linear(this.p2.y, defendY, lerp);
+        const malletRadius = GameOptions.mallet.radius;
+
+        // AI follows puck horizontally but stays in its zone
+        const targetX = Phaser.Math.Clamp(
+            this.puck.x,
+            this.tableBounds.left + malletRadius,
+            this.tableBounds.right - malletRadius
+        );
+
+        // AI defensive positioning - stay between puck and goal
+        let targetY = this.p2Zone.minY + (this.p2Zone.maxY - this.p2Zone.minY) * 0.3; // Default defensive position
+
+        // If puck is in AI's half, be more aggressive
+        if (this.puck.y < (this.tableBounds.top + this.tableBounds.bottom) / 2) {
+            targetY = Phaser.Math.Clamp(
+                this.puck.y + 30, // Stay slightly behind puck
+                this.p2Zone.minY,
+                this.p2Zone.maxY
+            );
+        }
+
+        // If puck is moving towards AI goal, intercept
+        if (this.puck.body.velocity.y < -100) {
+            const interceptX = this.puck.x + (this.puck.body.velocity.x * 0.3);
+            const clampedInterceptX = Phaser.Math.Clamp(
+                interceptX,
+                this.tableBounds.left + malletRadius,
+                this.tableBounds.right - malletRadius
+            );
+
+            // Use interpolation for smoother movement
+            const lerp = 0.08;
+            this.p2.x = Phaser.Math.Linear(this.p2.x, clampedInterceptX, lerp);
+        } else {
+            const lerp = 0.05;
+            this.p2.x = Phaser.Math.Linear(this.p2.x, targetX, lerp);
+        }
+
+        // Vertical movement
+        const lerpY = 0.06;
+        this.p2.y = Phaser.Math.Linear(this.p2.y, targetY, lerpY);
     }
 
     private lockMalletsToHalves() {
-        if (!this.tableOrigin || !this.table || !this.p1 || !this.p2) return;
+        if (!this.p1 || !this.p2) return;
 
-        const t = GAME_CONFIG.table;
-        const { width: screenWidth, height: screenHeight } = this.scale;
-        const midY = screenHeight / 2;
+        const malletRadius = GameOptions.mallet.radius;
+        const buffer = 5; // Small buffer for smooth movement
 
-        // Player 1 (bottom half) - constrain to bottom area
-        const p1MinY = midY + 20;
-        const p1MaxY = screenHeight - 50 - GAME_CONFIG.mallet.radius * 2;
-        this.p1.y = Phaser.Math.Clamp(this.p1.y, p1MinY, p1MaxY);
+        // Constrain P1 (player) to bottom half with proper boundaries
+        this.p1.x = Phaser.Math.Clamp(
+            this.p1.x,
+            this.tableBounds.left + malletRadius + buffer,
+            this.tableBounds.right - malletRadius - buffer
+        );
+        this.p1.y = Phaser.Math.Clamp(
+            this.p1.y,
+            this.p1Zone.minY,
+            this.p1Zone.maxY
+        );
 
-        // Player 2 (top half) - constrain to top area
-        const p2MinY = 120 + GAME_CONFIG.mallet.radius * 2;
-        const p2MaxY = midY - 20;
-        this.p2.y = Phaser.Math.Clamp(this.p2.y, p2MinY, p2MaxY);
+        // Constrain P2 (AI) to top half with proper boundaries
+        this.p2.x = Phaser.Math.Clamp(
+            this.p2.x,
+            this.tableBounds.left + malletRadius + buffer,
+            this.tableBounds.right - malletRadius - buffer
+        );
+        this.p2.y = Phaser.Math.Clamp(
+            this.p2.y,
+            this.p2Zone.minY,
+            this.p2Zone.maxY
+        );
 
-        // Constrain both to screen width
-        const minX = t.wallThickness + GAME_CONFIG.mallet.radius * 2;
-        const maxX = screenWidth - t.wallThickness - GAME_CONFIG.mallet.radius * 2;
-        this.p1.x = Phaser.Math.Clamp(this.p1.x, minX, maxX);
-        this.p2.x = Phaser.Math.Clamp(this.p2.x, minX, maxX);
+        // Prevent mallets from going outside table bounds entirely
+        if (this.p1.x - malletRadius < this.tableBounds.left) {
+            this.p1.setX(this.tableBounds.left + malletRadius);
+        }
+        if (this.p1.x + malletRadius > this.tableBounds.right) {
+            this.p1.setX(this.tableBounds.right - malletRadius);
+        }
+        if (this.p2.x - malletRadius < this.tableBounds.left) {
+            this.p2.setX(this.tableBounds.left + malletRadius);
+        }
+        if (this.p2.x + malletRadius > this.tableBounds.right) {
+            this.p2.setX(this.tableBounds.right - malletRadius);
+        }
+    }
+
+    private constrainPuckToTable() {
+        if (!this.puck || !this.puck.body) return;
+
+        const puckRadius = GameOptions.puck.radius;
+        const buffer = 3; // Smaller buffer for more natural movement
+
+        // Check bounds and adjust position if needed
+        let needsReposition = false;
+        let newX = this.puck.x;
+        let newY = this.puck.y;
+
+        if (this.puck.x - puckRadius < this.tableBounds.left + buffer) {
+            newX = this.tableBounds.left + puckRadius + buffer;
+            needsReposition = true;
+        } else if (this.puck.x + puckRadius > this.tableBounds.right - buffer) {
+            newX = this.tableBounds.right - puckRadius - buffer;
+            needsReposition = true;
+        }
+
+        if (this.puck.y - puckRadius < this.tableBounds.top + buffer) {
+            newY = this.tableBounds.top + puckRadius + buffer;
+            needsReposition = true;
+        } else if (this.puck.y + puckRadius > this.tableBounds.bottom - buffer) {
+            newY = this.tableBounds.bottom - puckRadius - buffer;
+            needsReposition = true;
+        }
+
+        if (needsReposition) {
+            this.puck.setPosition(newX, newY);
+            // Preserve more velocity for natural movement
+            if (Math.abs(this.puck.body.velocity.x) > 300 || Math.abs(this.puck.body.velocity.y) > 300) {
+                this.puck.body.setVelocity(
+                    this.puck.body.velocity.x * 0.85,
+                    this.puck.body.velocity.y * 0.85
+                );
+            }
+        }
     }
 
     private showRoundToast(text: string) {
-        const t = this.add.text(this.scale.width / 2, this.table.y, text, {
-            fontFamily: 'monospace', fontSize: '20px', color: '#fff', backgroundColor: '#021a'
-        }).setPadding(10, 6).setOrigin(0.5).setDepth(900);
-        this.tweens.add({ targets: t, alpha: 0, y: t.y - 40, duration: 900, onComplete: () => t.destroy() });
+        const t = this.add.text(this.scale.width / 2, this.scale.height * 0.4, text, {
+            fontFamily: 'Arial Black', fontSize: '24px', color: '#fff', backgroundColor: '#00000080'
+        }).setPadding(20, 10).setOrigin(0.5).setDepth(900);
+        this.tweens.add({ targets: t, alpha: 0, y: t.y - 50, duration: 1500, onComplete: () => t.destroy() });
     }
 
     private showMatchBanner(text: string) {
-        const b = this.add.text(this.scale.width / 2, this.scale.height * 0.1, text, {
-            fontFamily: 'monospace', fontSize: '22px', color: '#0f0'
-        }).setOrigin(0.5).setDepth(900);
-        this.tweens.add({ targets: b, alpha: 0.0, duration: 1400, delay: 600, onComplete: () => b.destroy() });
+        const b = this.add.text(this.scale.width / 2, this.scale.height * 0.15, text, {
+            fontFamily: 'Arial Black', fontSize: '28px', color: '#0f0', backgroundColor: '#00000080'
+        }).setPadding(15, 8).setOrigin(0.5).setDepth(900);
+        this.tweens.add({ targets: b, alpha: 0.0, duration: 2000, delay: 800, onComplete: () => b.destroy() });
     }
 
     private fullRestart() {

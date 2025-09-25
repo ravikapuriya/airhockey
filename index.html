@@ -2,22 +2,48 @@
 <html lang="en">
 
 <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Air Hockey – Phaser 3</title>
+    <meta charset="UTF-8" />
+    <meta name="viewport"
+        content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, shrink-to-fit=no" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <title>Air Hockey</title>
+    <script src="library/playgama/playgama-bridge.js"></script>
     <style>
         html,
         body,
-        #game {
-            height: 100%;
+        #game-container {
             margin: 0;
-            background: #fff
+            padding: 0;
+            background: #0b1020;
+            overflow: hidden;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+
+        canvas {
+            outline: none;
+            touch-action: none;
+            -ms-touch-action: none;
+            -webkit-touch-callout: none;
+            -webkit-user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            user-select: none;
+        }
+
+        @font-face {
+            font-family: 'GenosRegular';
+            src: url('assets/fonts/Genos-Regular.ttf');
         }
     </style>
 </head>
 
 <body>
-    <div id="game"></div>
+    <div id="game-container"></div>
+    <div style="font-family:GenosRegular; position:absolute; left:-1000px; visibility:hidden;">.</div>
     <script type="module" src="/src/main.ts"></script>
 </body>
 
